@@ -1,13 +1,55 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 const CLAUDE_API_KEY = import.meta.env.VITE_CLAUDE_API_KEY;
 const ACCESS_CODE = "7Group";
 const BRAND = { black: "#0d0d0d", dark: "#111114", mid: "#1a1a1e", red: "#c0392b", redL: "#e74c3c", silver: "#b8b8c0", silverD: "#8a8a94", white: "#f0f0f2" };
 
-// ─── STORAGE ───
+// ─── SUPABASE ───
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_KEY
+);
+
 const DB = {
-  async get(key) { try { const r = await window.storage.get(key, true); return r ? JSON.parse(r.value) : null; } catch { return null; } },
-  async set(key, val) { try { await window.storage.set(key, JSON.stringify(val), true); } catch {} }
+  async getClients() {
+    const { data, error } = await supabase.from("clients").select("*").order("created_at");
+    if (error) { console.error("getClients:", error); return []; }
+    return data.map(r => ({ id: r.id, name: r.name, company: r.company, industry: r.industry, color: r.color }));
+  },
+  async upsertClient(c) {
+    const { error } = await supabase.from("clients").upsert({ id: c.id, name: c.name, company: c.company, industry: c.industry, color: c.color });
+    if (error) console.error("upsertClient:", error);
+  },
+  async deleteClient(id) {
+    const { error } = await supabase.from("clients").delete().eq("id", id);
+    if (error) console.error("deleteClient:", error);
+  },
+  async getProjects() {
+    const { data, error } = await supabase.from("projects").select("*").order("created_at");
+    if (error) { console.error("getProjects:", error); return []; }
+    return data.map(r => ({
+      id: r.id, clientId: r.client_id, title: r.title, type: r.type, status: r.status,
+      shootDate: r.shoot_date || "", shootTime: r.shoot_time || "", location: r.location || "",
+      people: r.people || [], questions: r.questions || [], shotList: r.shot_list || [],
+      equipment: r.equipment || [], links: r.links || [], deliverables: r.deliverables || [],
+      notes: r.notes || "", summary: r.summary || "", createdAt: r.created_at
+    }));
+  },
+  async upsertProject(p) {
+    const { error } = await supabase.from("projects").upsert({
+      id: p.id, client_id: p.clientId, title: p.title, type: p.type, status: p.status,
+      shoot_date: p.shootDate, shoot_time: p.shootTime, location: p.location,
+      people: p.people, questions: p.questions, shot_list: p.shotList,
+      equipment: p.equipment, links: p.links, deliverables: p.deliverables,
+      notes: p.notes, summary: p.summary
+    });
+    if (error) console.error("upsertProject:", error);
+  },
+  async deleteProject(id) {
+    const { error } = await supabase.from("projects").delete().eq("id", id);
+    if (error) console.error("deleteProject:", error);
+  }
 };
 
 // ─── AI ───
@@ -27,28 +69,11 @@ async function genQuestions(client, type, summary) {
   return JSON.parse(d.content[0].text.replace(/```json|```/g, "").trim());
 }
 
-// ─── DATA ───
-const DEF_CLIENTS = [
-  { id: "c1", name: "Phil Steinberg", company: "Schatz, Steinberg & Klayman", industry: "Legal / Criminal Defense", color: "#c9a227" },
-  { id: "c2", name: "W.O.N.", company: "Williams Outreach Network", industry: "Nonprofit / Youth Agriculture", color: "#27a844" },
-];
-const DEF_PROJECTS = [{
-  id: "p1", clientId: "c1", title: "Client Testimonial - Marcus T.", type: "Testimonial", status: "Pre-Production",
-  shootDate: "2026-03-22", shootTime: "10:00 AM", location: "SSK Office - 1500 JFK Blvd, Suite 1300, Philadelphia",
-  people: [{ id: "t1", name: "Marcus T.", role: "Former Client (Acquitted 2023)", phone: "", email: "", notes: "Prefers morning shoots.", confirmed: true }],
-  questions: ["What was your first impression of Phil?", "How did Phil's approach differ from other attorneys?", "What would you tell someone facing similar charges?", "Describe the moment you heard the verdict.", "What does Phil Steinberg mean to your family?"],
-  shotList: ["Wide establishing - office exterior", "Medium - talent seated", "Close-up - emotional moments", "B-roll - Phil in office", "B-roll - signage, awards", "Two-shot - handshake"],
-  equipment: ["Sony A7IV", "Rode NTG5", "Aputure 300D", "2x Softbox", "Lav backup", "Tripod + Gimbal"],
-  links: [{ label: "Google Drive", url: "" }, { label: "Frame.io", url: "" }],
-  deliverables: [{ name: "60s Testimonial", status: "Not Started" }, { name: "30s Cut", status: "Not Started" }, { name: "Full Interview", status: "Not Started" }, { name: "Quote Stills x3", status: "Not Started" }],
-  notes: "Phil reviews all cuts. No case details on camera. PA Bar compliance.", summary: "Criminal defense testimonial from acquitted former client. Trust-focused narrative.", createdAt: "2026-03-09"
-}];
+// ─── CONSTANTS ───
 const STATUSES = ["Pre-Production", "Scheduled", "Shooting", "In Edit", "Review", "Delivered", "Archived"];
 const TYPES = ["Testimonial", "Commercial", "Brand Film", "Social Content", "Event Coverage", "Interview", "BTS / Documentary"];
 const DEL_ST = ["Not Started", "In Progress", "In Review", "Approved", "Published"];
 const ST_COL = { "Pre-Production": "#f59e0b", Scheduled: "#3b82f6", Shooting: "#e74c3c", "In Edit": "#a855f7", Review: "#f97316", Delivered: "#4ade80", Archived: "#6b7280" };
-
-// ─── STYLES ───
 const inp = (extra) => ({ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: BRAND.white, fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "'DM Sans',sans-serif", ...extra });
 const lbl = { fontSize: 10, color: BRAND.silverD, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 6, fontWeight: 700, fontFamily: "'DM Sans',sans-serif" };
 
@@ -69,9 +94,9 @@ function AccessGate({ onUnlock }) {
         <div style={{ fontSize: 10, color: BRAND.red, textTransform: "uppercase", letterSpacing: 4, marginBottom: 32, fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}>Production AI</div>
         <input value={code} onChange={e => { setCode(e.target.value); setError(false); }} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Enter access code" type="password"
           style={{ ...inp({ textAlign: "center", fontSize: 16, letterSpacing: 2, marginBottom: 12, border: error ? "1px solid #e74c3c" : "1px solid rgba(255,255,255,0.08)" }) }} autoFocus />
-        {error && <div style={{ fontSize: 12, color: BRAND.redL, marginBottom: 12, fontFamily: "'DM Sans',sans-serif" }}>Invalid code</div>}
-        <button onClick={submit} style={{ width: "100%", padding: 14, borderRadius: 8, border: "none", background: BRAND.red, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>Enter</button>
-        <style>{`@keyframes shake { 0%,100% {transform:translateX(0)} 25% {transform:translateX(-8px)} 75% {transform:translateX(8px)} }`}</style>
+        {error && <div style={{ fontSize: 12, color: BRAND.redL, marginBottom: 12 }}>Invalid code</div>}
+        <button onClick={submit} style={{ width: "100%", padding: 14, borderRadius: 8, border: "none", background: BRAND.red, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Enter</button>
+        <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
       </div>
     </div>
   );
@@ -84,25 +109,24 @@ function ListEd({ items, onChange, ph }) {
       {items.map((item, i) => (
         <div key={i} style={{ display: "flex", gap: 6, marginBottom: 5, alignItems: "center" }}>
           <span style={{ color: BRAND.silverD, fontSize: 11, minWidth: 18 }}>{i + 1}.</span>
-          <input value={item} onChange={e => { const n = [...items]; n[i] = e.target.value; onChange(n); }} placeholder={ph}
-            style={inp({ padding: "8px 10px", fontSize: 13 })} />
+          <input value={item} onChange={e => { const n = [...items]; n[i] = e.target.value; onChange(n); }} placeholder={ph} style={inp({ padding: "8px 10px", fontSize: 13 })} />
           <button onClick={() => onChange(items.filter((_, x) => x !== i))} style={{ background: "none", border: "none", color: "rgba(239,68,68,0.4)", cursor: "pointer", fontSize: 16, padding: "4px 8px" }}>×</button>
         </div>
       ))}
-      <button onClick={() => onChange([...items, ""])} style={{ background: "none", border: "none", color: BRAND.silverD, fontSize: 12, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", padding: "6px 0" }}>+ Add</button>
+      <button onClick={() => onChange([...items, ""])} style={{ background: "none", border: "none", color: BRAND.silverD, fontSize: 12, cursor: "pointer", padding: "6px 0" }}>+ Add</button>
     </div>
   );
 }
 
-// ─── PERSON CARD (Mobile-friendly) ───
+// ─── PERSON CARD ───
 function PersonCard({ person, onUpdate, onRemove, color }) {
   const f = (k, v) => onUpdate({ ...person, [k]: v });
   const ini = person.name?.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) || "?";
   return (
     <div style={{ padding: 14, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-        <div style={{ width: 38, height: 38, borderRadius: 10, background: `${color}20`, border: `1px solid ${color}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color, fontFamily: "'Bebas Neue',sans-serif", flexShrink: 0 }}>{ini}</div>
-        <input value={person.name} onChange={e => f("name", e.target.value)} placeholder="Full Name" style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 16, fontWeight: 600, outline: "none", fontFamily: "'DM Sans',sans-serif", minWidth: 0 }} />
+        <div style={{ width: 38, height: 38, borderRadius: 10, background: `${color}20`, border: `1px solid ${color}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color, flexShrink: 0 }}>{ini}</div>
+        <input value={person.name} onChange={e => f("name", e.target.value)} placeholder="Full Name" style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 16, fontWeight: 600, outline: "none", minWidth: 0 }} />
         <button onClick={onRemove} style={{ background: "none", border: "none", color: "rgba(239,68,68,0.35)", cursor: "pointer", fontSize: 16, flexShrink: 0 }}>×</button>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
@@ -111,7 +135,7 @@ function PersonCard({ person, onUpdate, onRemove, color }) {
         </button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <input value={person.role} onChange={e => f("role", e.target.value)} placeholder="Role (e.g. Former Client)" style={inp({ padding: "8px 10px", fontSize: 13 })} />
+        <input value={person.role} onChange={e => f("role", e.target.value)} placeholder="Role" style={inp({ padding: "8px 10px", fontSize: 13 })} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
           <input value={person.phone} onChange={e => f("phone", e.target.value)} placeholder="Phone" style={inp({ padding: "8px 10px", fontSize: 13 })} />
           <input value={person.email} onChange={e => f("email", e.target.value)} placeholder="Email" style={inp({ padding: "8px 10px", fontSize: 13 })} />
@@ -122,12 +146,38 @@ function PersonCard({ person, onUpdate, onRemove, color }) {
   );
 }
 
-// ─── MAIN ───
+// ─── NEW CLIENT FORM ───
+function NewClientForm({ onAdd, onClose }) {
+  const [name, setName] = useState(""); const [company, setCompany] = useState(""); const [industry, setIndustry] = useState("");
+  const colors = ["#c9a227", "#27a844", "#2780c9", "#c92770", "#8b5cf6", "#06b6d4", "#f59e0b"];
+  const [color, setColor] = useState(colors[0]);
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <span style={{ fontSize: 18, fontWeight: 700, color: BRAND.white, fontFamily: "'Bebas Neue',sans-serif", letterSpacing: 1.5 }}>New Client</span>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: BRAND.silverD, fontSize: 20, cursor: "pointer" }}>×</button>
+      </div>
+      {[["Client Name", name, setName], ["Company", company, setCompany], ["Industry", industry, setIndustry]].map(([l, v, s]) => (
+        <div key={l} style={{ marginBottom: 12 }}><div style={lbl}>{l}</div><input value={v} onChange={e => s(e.target.value)} style={inp({})} /></div>
+      ))}
+      <div style={{ marginBottom: 16 }}>
+        <div style={lbl}>Color</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {colors.map(c => <button key={c} onClick={() => setColor(c)} style={{ width: 32, height: 32, borderRadius: 8, background: c, border: color === c ? "2px solid #fff" : "2px solid transparent", cursor: "pointer" }} />)}
+        </div>
+      </div>
+      <button onClick={() => { if (name.trim()) onAdd({ id: `c${Date.now()}`, name, company, industry, color }); }}
+        style={{ width: "100%", padding: 14, borderRadius: 8, border: "none", background: BRAND.red, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Add Client</button>
+    </>
+  );
+}
+
+// ─── MAIN APP ───
 export default function App() {
   const [authed, setAuthed] = useState(() => sessionStorage.getItem("sep-auth") === "1");
-  const [clients, setClients] = useState(DEF_CLIENTS);
-  const [projects, setProjects] = useState(DEF_PROJECTS);
-  const [activePid, setActivePid] = useState("p1");
+  const [clients, setClients] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [activePid, setActivePid] = useState(null);
   const [tab, setTab] = useState("overview");
   const [showSidebar, setShowSidebar] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
@@ -135,54 +185,91 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiErr, setAiErr] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  const saveRef = useRef(null);
+  const [saving, setSaving] = useState(false);
+  const saveTimer = useRef(null);
 
   useEffect(() => {
     const l = document.createElement("link");
     l.href = "https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&display=swap";
     l.rel = "stylesheet"; document.head.appendChild(l);
-    // Add viewport meta for mobile
     let vp = document.querySelector('meta[name="viewport"]');
     if (!vp) { vp = document.createElement("meta"); vp.name = "viewport"; document.head.appendChild(vp); }
     vp.content = "width=device-width, initial-scale=1, maximum-scale=1";
-    (async () => {
-      const [c, p] = await Promise.all([DB.get("prod-clients"), DB.get("prod-projects")]);
-      if (c) setClients(c); if (p && p.length) { setProjects(p); setActivePid(p[0].id); }
-      setLoaded(true);
-    })();
   }, []);
 
+  // Load data from Supabase
   useEffect(() => {
-    if (!loaded) return;
-    if (saveRef.current) clearTimeout(saveRef.current);
-    saveRef.current = setTimeout(() => { DB.set("prod-clients", clients); DB.set("prod-projects", projects); }, 600);
-  }, [clients, projects, loaded]);
+    if (!authed) return;
+    (async () => {
+      const [c, p] = await Promise.all([DB.getClients(), DB.getProjects()]);
+      setClients(c); setProjects(p);
+      if (p.length > 0) setActivePid(p[0].id);
+      setLoaded(true);
+    })();
+  }, [authed]);
 
-  if (!authed) return <AccessGate onUnlock={() => setAuthed(true)} />;
-  if (!loaded) return <div style={{ minHeight: "100vh", background: BRAND.black, display: "flex", alignItems: "center", justifyContent: "center", color: BRAND.silverD }}>Loading...</div>;
+  // Auto-save project changes with debounce
+  const proj = projects.find(p => p.id === activePid);
+  const projRef = useRef(proj);
+  useEffect(() => { projRef.current = proj; }, [proj]);
 
-  const proj = projects.find(p => p.id === activePid) || projects[0];
-  const pClient = clients.find(c => c.id === proj?.clientId);
-  const upd = (k, v) => setProjects(prev => prev.map(p => p.id === activePid ? { ...p, [k]: v } : p));
-  const filtered = filterCid === "all" ? projects : projects.filter(p => p.clientId === filterCid);
+  const saveProject = useCallback((p) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      setSaving(true);
+      await DB.upsertProject(p);
+      setSaving(false);
+    }, 1000);
+  }, []);
 
-  const addProj = (cid) => {
-    const np = { id: `p${Date.now()}`, clientId: cid, title: "New Shoot", type: "Testimonial", status: "Pre-Production", shootDate: "", shootTime: "", location: "", people: [], questions: [], shotList: [], equipment: [], links: [{ label: "Google Drive", url: "" }], deliverables: [], notes: "", summary: "", createdAt: new Date().toISOString().split("T")[0] };
-    setProjects(prev => [...prev, np]); setActivePid(np.id); setTab("overview"); setShowSidebar(false);
+  const upd = (k, v) => {
+    setProjects(prev => {
+      const updated = prev.map(p => p.id === activePid ? { ...p, [k]: v } : p);
+      const updatedProj = updated.find(p => p.id === activePid);
+      if (updatedProj) saveProject(updatedProj);
+      return updated;
+    });
   };
 
-  const delProj = () => { if (projects.length <= 1) return; const remaining = projects.filter(p => p.id !== activePid); setProjects(remaining); setActivePid(remaining[0].id); };
+  const pClient = clients.find(c => c.id === proj?.clientId);
+  const filtered = filterCid === "all" ? projects : projects.filter(p => p.clientId === filterCid);
+
+  const addClient = async (client) => {
+    setClients(prev => [...prev, client]);
+    await DB.upsertClient(client);
+    setShowNewClient(false);
+  };
+
+  const addProj = async (cid) => {
+    const np = { id: `p${Date.now()}`, clientId: cid, title: "New Shoot", type: "Testimonial", status: "Pre-Production", shootDate: "", shootTime: "", location: "", people: [], questions: [], shotList: [], equipment: [], links: [{ label: "Google Drive", url: "" }], deliverables: [], notes: "", summary: "", createdAt: new Date().toISOString() };
+    setProjects(prev => [...prev, np]);
+    setActivePid(np.id); setTab("overview"); setShowSidebar(false);
+    await DB.upsertProject(np);
+  };
+
+  const delProj = async () => {
+    if (projects.length <= 1) return;
+    await DB.deleteProject(activePid);
+    const remaining = projects.filter(p => p.id !== activePid);
+    setProjects(remaining);
+    setActivePid(remaining[0]?.id);
+  };
 
   const handleAi = async () => {
-    if (!proj.summary.trim()) { setAiErr("Add a project summary first."); return; }
+    if (!proj?.summary?.trim()) { setAiErr("Add a project summary first."); return; }
     setAiLoading(true); setAiErr(null);
-    try { const qs = await genQuestions(pClient?.name || proj.title, proj.type, proj.summary); upd("questions", [...proj.questions, ...qs]); } catch (e) { setAiErr(e.message); }
+    try {
+      const qs = await genQuestions(pClient?.name || proj.title, proj.type, proj.summary);
+      upd("questions", [...proj.questions, ...qs]);
+    } catch (e) { setAiErr(e.message); }
     setAiLoading(false);
   };
 
+  if (!authed) return <AccessGate onUnlock={() => setAuthed(true)} />;
+  if (!loaded) return <div style={{ minHeight: "100vh", background: BRAND.black, display: "flex", alignItems: "center", justifyContent: "center", color: BRAND.silverD, fontFamily: "'DM Sans',sans-serif" }}>Loading from database...</div>;
+
   const tabs = ["overview", "people", "creative", "links", "deliverables"];
 
-  // ─── SIDEBAR CONTENT ───
   const sidebarContent = (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.dark }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "18px 16px 8px" }}>
@@ -191,16 +278,14 @@ export default function App() {
           <div style={{ fontSize: 12, fontWeight: 700, color: BRAND.white, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'Bebas Neue',sans-serif" }}>Septenary</div>
           <div style={{ fontSize: 7, color: BRAND.red, textTransform: "uppercase", letterSpacing: 3, fontWeight: 700 }}>Production AI</div>
         </div>
-        <button onClick={() => setShowSidebar(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: BRAND.silverD, fontSize: 20, cursor: "pointer", display: "none", "@media(maxWidth:768px)": { display: "block" } }}>×</button>
+        {saving && <span style={{ marginLeft: "auto", fontSize: 9, color: BRAND.silverD }}>Saving...</span>}
       </div>
-
       <div style={{ padding: "10px 12px 4px" }}>
         <select value={filterCid} onChange={e => setFilterCid(e.target.value)} style={inp({ padding: "8px 10px", fontSize: 12 })}>
           <option value="all" style={{ background: "#111" }}>All Clients</option>
           {clients.map(c => <option key={c.id} value={c.id} style={{ background: "#111" }}>{c.name}</option>)}
         </select>
       </div>
-
       <div style={{ flex: 1, overflowY: "auto", padding: "4px 8px" }}>
         {clients.filter(c => filterCid === "all" || c.id === filterCid).map(client => {
           const cp = filtered.filter(p => p.clientId === client.id);
@@ -226,8 +311,8 @@ export default function App() {
             </div>
           );
         })}
+        {clients.length === 0 && <div style={{ padding: 16, color: BRAND.silverD, fontSize: 12, textAlign: "center" }}>No clients yet. Add one below.</div>}
       </div>
-
       <div style={{ padding: "8px 10px", borderTop: "1px solid rgba(255,255,255,0.04)", display: "flex", gap: 6 }}>
         <button onClick={() => setShowNewClient(true)} style={{ flex: 1, padding: 10, borderRadius: 8, border: `1px solid ${BRAND.red}33`, background: `${BRAND.red}10`, color: BRAND.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Client</button>
         <button onClick={() => { if (clients.length) addProj(clients[0].id); }} style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: BRAND.silver, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Shoot</button>
@@ -237,30 +322,20 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: BRAND.black, color: BRAND.white, fontFamily: "'DM Sans',sans-serif" }}>
-
-      {/* Mobile overlay sidebar */}
       {showSidebar && (
         <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex" }}>
           <div style={{ width: 300, maxWidth: "85vw", height: "100%", boxShadow: "4px 0 20px rgba(0,0,0,0.5)" }}>{sidebarContent}</div>
           <div onClick={() => setShowSidebar(false)} style={{ flex: 1, background: "rgba(0,0,0,0.6)" }} />
         </div>
       )}
-
       <div style={{ display: "flex", minHeight: "100vh" }}>
-        {/* Desktop sidebar */}
-        <div className="desk-sidebar" style={{ width: 270, minWidth: 270, height: "100vh", position: "sticky", top: 0, borderRight: "1px solid rgba(255,255,255,0.04)" }}>
-          {sidebarContent}
-        </div>
-
-        {/* Main */}
+        <div className="desk-sidebar" style={{ width: 270, minWidth: 270, height: "100vh", position: "sticky", top: 0, borderRight: "1px solid rgba(255,255,255,0.04)" }}>{sidebarContent}</div>
         {proj ? (
           <div style={{ flex: 1, minWidth: 0, overflowY: "auto", height: "100vh" }}>
-            {/* Header */}
             <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", position: "sticky", top: 0, background: BRAND.black, zIndex: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                 <button className="mob-menu" onClick={() => setShowSidebar(true)} style={{ background: "none", border: "none", color: BRAND.silver, fontSize: 20, cursor: "pointer", padding: "4px 8px", display: "none" }}>☰</button>
-                <input value={proj.title} onChange={e => upd("title", e.target.value)}
-                  style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 20, fontWeight: 700, fontFamily: "'Bebas Neue',sans-serif", outline: "none", letterSpacing: 1, minWidth: 0 }} />
+                <input value={proj.title} onChange={e => upd("title", e.target.value)} style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 20, fontWeight: 700, fontFamily: "'Bebas Neue',sans-serif", outline: "none", letterSpacing: 1, minWidth: 0 }} />
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 {pClient && <span style={{ fontSize: 12, color: pClient.color, fontWeight: 600 }}>{pClient.name}</span>}
@@ -268,26 +343,18 @@ export default function App() {
                   {TYPES.map(t => <option key={t} value={t} style={{ background: "#111" }}>{t}</option>)}
                 </select>
                 <select value={proj.status} onChange={e => upd("status", e.target.value)}
-                  style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${ST_COL[proj.status]}44`, background: `${ST_COL[proj.status]}12`, color: ST_COL[proj.status], fontSize: 11, fontWeight: 600, outline: "none", fontFamily: "'DM Sans',sans-serif" }}>
+                  style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${ST_COL[proj.status]}44`, background: `${ST_COL[proj.status]}12`, color: ST_COL[proj.status], fontSize: 11, fontWeight: 600, outline: "none" }}>
                   {STATUSES.map(s => <option key={s} value={s} style={{ background: "#111" }}>{s}</option>)}
                 </select>
                 <button onClick={delProj} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.15)", background: "transparent", color: "rgba(239,68,68,0.35)", fontSize: 12, cursor: "pointer", marginLeft: "auto" }}>✕</button>
               </div>
             </div>
-
-            {/* Tabs - scrollable on mobile */}
-            <div style={{ padding: "0 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", display: "flex", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none" }}>
+            <div style={{ padding: "0 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", display: "flex", overflowX: "auto", scrollbarWidth: "none" }}>
               {tabs.map(t => (
-                <button key={t} onClick={() => setTab(t)}
-                  style={{ padding: "12px 14px", border: "none", borderBottom: tab === t ? `2px solid ${BRAND.red}` : "2px solid transparent", background: "none", color: tab === t ? BRAND.white : BRAND.silverD, fontSize: 12, fontWeight: 500, cursor: "pointer", textTransform: "capitalize", whiteSpace: "nowrap", flexShrink: 0 }}>
-                  {t}
-                </button>
+                <button key={t} onClick={() => setTab(t)} style={{ padding: "12px 14px", border: "none", borderBottom: tab === t ? `2px solid ${BRAND.red}` : "2px solid transparent", background: "none", color: tab === t ? BRAND.white : BRAND.silverD, fontSize: 12, fontWeight: 500, cursor: "pointer", textTransform: "capitalize", whiteSpace: "nowrap", flexShrink: 0 }}>{t}</button>
               ))}
             </div>
-
-            {/* Content */}
             <div style={{ padding: 16 }}>
-
               {tab === "overview" && (
                 <div>
                   <div style={lbl}>Shoot Details</div>
@@ -296,20 +363,12 @@ export default function App() {
                     <div><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Time</div><input value={proj.shootTime} onChange={e => upd("shootTime", e.target.value)} placeholder="10:00 AM" style={inp({})} /></div>
                   </div>
                   <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Location</div><input value={proj.location} onChange={e => upd("location", e.target.value)} placeholder="Shoot location..." style={inp({})} /></div>
-                  <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Project Summary (AI uses this for questions)</div><textarea value={proj.summary} onChange={e => upd("summary", e.target.value)} placeholder="Brief description — who, what, why..." style={inp({ minHeight: 80, resize: "vertical" })} /></div>
-                  <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Production Notes</div><textarea value={proj.notes} onChange={e => upd("notes", e.target.value)} placeholder="Key notes for the team..." style={inp({ minHeight: 80, resize: "vertical" })} /></div>
+                  <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Project Summary (AI uses this)</div><textarea value={proj.summary} onChange={e => upd("summary", e.target.value)} placeholder="Brief description — who, what, why..." style={inp({ minHeight: 80, resize: "vertical" })} /></div>
+                  <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, color: BRAND.silverD, marginBottom: 3, letterSpacing: 1, textTransform: "uppercase" }}>Production Notes</div><textarea value={proj.notes} onChange={e => upd("notes", e.target.value)} placeholder="Key notes..." style={inp({ minHeight: 80, resize: "vertical" })} /></div>
                   <div style={lbl}>Equipment</div>
                   <ListEd items={proj.equipment} onChange={v => upd("equipment", v)} ph="Add gear..." />
-                  <div style={{ ...lbl, marginTop: 18 }}>Quick Status</div>
-                  {[["People", `${proj.people.length}`, `${proj.people.filter(t => t.confirmed).length} confirmed`], ["Questions", `${proj.questions.length}`, "ready"], ["Deliverables", `${proj.deliverables.filter(d => d.status === "Published").length}/${proj.deliverables.length}`, "done"], ["Links", `${proj.links.filter(l => l.url).length}/${proj.links.length}`, "set"]].map(([n, v, s]) => (
-                    <div key={n} style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: 12, color: BRAND.silverD }}>{n}</span>
-                      <span style={{ fontSize: 13, color: BRAND.white, fontWeight: 600 }}>{v} <span style={{ color: BRAND.silverD, fontSize: 10, fontWeight: 400 }}>{s}</span></span>
-                    </div>
-                  ))}
                 </div>
               )}
-
               {tab === "people" && (
                 <div>
                   <div style={lbl}>People on This Project</div>
@@ -322,13 +381,11 @@ export default function App() {
                     style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: BRAND.silverD, fontSize: 13, cursor: "pointer", marginTop: 8 }}>+ Add Person</button>
                 </div>
               )}
-
               {tab === "creative" && (
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
                     <div style={lbl}>Interview Questions</div>
-                    <button onClick={handleAi} disabled={aiLoading}
-                      style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: aiLoading ? "rgba(255,255,255,0.06)" : BRAND.red, color: aiLoading ? BRAND.silverD : "#fff", fontSize: 12, fontWeight: 700, cursor: aiLoading ? "not-allowed" : "pointer" }}>
+                    <button onClick={handleAi} disabled={aiLoading} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: aiLoading ? "rgba(255,255,255,0.06)" : BRAND.red, color: aiLoading ? BRAND.silverD : "#fff", fontSize: 12, fontWeight: 700, cursor: aiLoading ? "not-allowed" : "pointer" }}>
                       {aiLoading ? "Thinking..." : "⚡ AI Generate"}
                     </button>
                   </div>
@@ -338,7 +395,6 @@ export default function App() {
                   <ListEd items={proj.shotList} onChange={v => upd("shotList", v)} ph="Add shot..." />
                 </div>
               )}
-
               {tab === "links" && (
                 <div>
                   <div style={lbl}>Editing & Software Links</div>
@@ -355,19 +411,16 @@ export default function App() {
                       </div>
                     </div>
                   ))}
-                  <button onClick={() => upd("links", [...proj.links, { label: "", url: "" }])}
-                    style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: BRAND.silverD, fontSize: 13, cursor: "pointer", marginTop: 6 }}>+ Add Link</button>
+                  <button onClick={() => upd("links", [...proj.links, { label: "", url: "" }])} style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: BRAND.silverD, fontSize: 13, cursor: "pointer", marginTop: 6 }}>+ Add Link</button>
                 </div>
               )}
-
               {tab === "deliverables" && (
                 <div>
                   <div style={lbl}>Deliverables</div>
                   {proj.deliverables.map((d, i) => (
                     <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", marginBottom: 6 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <input value={d.name} onChange={e => { const n = [...proj.deliverables]; n[i] = { ...n[i], name: e.target.value }; upd("deliverables", n); }} placeholder="Deliverable..."
-                          style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 14, outline: "none", minWidth: 0 }} />
+                        <input value={d.name} onChange={e => { const n = [...proj.deliverables]; n[i] = { ...n[i], name: e.target.value }; upd("deliverables", n); }} placeholder="Deliverable..." style={{ flex: 1, background: "none", border: "none", color: BRAND.white, fontSize: 14, outline: "none", minWidth: 0 }} />
                         <button onClick={() => upd("deliverables", proj.deliverables.filter((_, x) => x !== i))} style={{ background: "none", border: "none", color: "rgba(239,68,68,0.35)", cursor: "pointer", fontSize: 14, flexShrink: 0 }}>×</button>
                       </div>
                       <select value={d.status} onChange={e => { const n = [...proj.deliverables]; n[i] = { ...n[i], status: e.target.value }; upd("deliverables", n); }}
@@ -376,66 +429,33 @@ export default function App() {
                       </select>
                     </div>
                   ))}
-                  <button onClick={() => upd("deliverables", [...proj.deliverables, { name: "", status: "Not Started" }])}
-                    style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: BRAND.silverD, fontSize: 13, cursor: "pointer", marginTop: 6 }}>+ Add Deliverable</button>
+                  <button onClick={() => upd("deliverables", [...proj.deliverables, { name: "", status: "Not Started" }])} style={{ width: "100%", padding: 12, borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: BRAND.silverD, fontSize: 13, cursor: "pointer", marginTop: 6 }}>+ Add Deliverable</button>
                 </div>
               )}
             </div>
           </div>
         ) : (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: BRAND.silverD }}>Select or create a project</div>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: BRAND.silverD, padding: 20 }}>
+            <div style={{ fontSize: 16, marginBottom: 12 }}>No projects yet</div>
+            <button onClick={() => { if (clients.length) addProj(clients[0].id); else setShowNewClient(true); }}
+              style={{ padding: "12px 24px", borderRadius: 8, border: "none", background: BRAND.red, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+              {clients.length ? "+ Create First Shoot" : "+ Add First Client"}
+            </button>
+          </div>
         )}
       </div>
-
-      {/* New Client Modal */}
       {showNewClient && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div style={{ background: BRAND.dark, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: 24, width: "100%", maxWidth: 420 }}>
-            <NewClientForm onAdd={c => { setClients(prev => [...prev, c]); setShowNewClient(false); }} onClose={() => setShowNewClient(false)} />
+            <NewClientForm onAdd={addClient} onClose={() => setShowNewClient(false)} />
           </div>
         </div>
       )}
-
       <style>{`
-        @media(max-width:768px) {
-          .desk-sidebar { display:none !important; }
-          .mob-menu { display:block !important; }
-        }
-        @media(min-width:769px) {
-          .mob-menu { display:none !important; }
-        }
-        ::-webkit-scrollbar { width:4px; }
-        ::-webkit-scrollbar-track { background:transparent; }
-        ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.08); border-radius:4px; }
+        @media(max-width:768px){.desk-sidebar{display:none!important}.mob-menu{display:block!important}}
+        @media(min-width:769px){.mob-menu{display:none!important}}
+        ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
       `}</style>
     </div>
-  );
-}
-
-function NewClientForm({ onAdd, onClose }) {
-  const [name, setName] = useState(""); const [company, setCompany] = useState(""); const [industry, setIndustry] = useState("");
-  const colors = ["#c9a227", "#27a844", "#2780c9", "#c92770", "#8b5cf6", "#06b6d4", "#f59e0b"];
-  const [color, setColor] = useState(colors[0]);
-  return (
-    <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-        <span style={{ fontSize: 18, fontWeight: 700, color: BRAND.white, fontFamily: "'Bebas Neue',sans-serif", letterSpacing: 1.5 }}>New Client</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: BRAND.silverD, fontSize: 20, cursor: "pointer" }}>×</button>
-      </div>
-      {[["Client Name", name, setName], ["Company", company, setCompany], ["Industry", industry, setIndustry]].map(([l, v, s]) => (
-        <div key={l} style={{ marginBottom: 12 }}>
-          <div style={lbl}>{l}</div>
-          <input value={v} onChange={e => s(e.target.value)} style={inp({})} />
-        </div>
-      ))}
-      <div style={{ marginBottom: 16 }}>
-        <div style={lbl}>Color</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {colors.map(c => <button key={c} onClick={() => setColor(c)} style={{ width: 32, height: 32, borderRadius: 8, background: c, border: color === c ? "2px solid #fff" : "2px solid transparent", cursor: "pointer" }} />)}
-        </div>
-      </div>
-      <button onClick={() => { if (name.trim()) onAdd({ id: `c${Date.now()}`, name, company, industry, color }); }}
-        style={{ width: "100%", padding: 14, borderRadius: 8, border: "none", background: BRAND.red, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Add Client</button>
-    </>
   );
 }
